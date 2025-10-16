@@ -58,6 +58,7 @@ def create_table(client):
     client.command("""
     CREATE TABLE IF NOT EXISTS datamart_stok.dim_entity (
         entity_id UInt32,
+        regency_id UInt32,
         entities_name String,
         address String,
         lat Float64,
@@ -75,27 +76,38 @@ def create_table(client):
     client.command("""
     CREATE TABLE IF NOT EXISTS datamart_stok.dim_regency (
         regency_id UInt32,
+        province_id UInt32,
         name_regency String
     ) ENGINE = MergeTree() ORDER BY regency_id
     """)
 
     client.command("""
     CREATE TABLE IF NOT EXISTS datamart_stok.fact_stocks (
-        fact_id UInt32,
+        stock_id UInt32,
         material_id UInt32,
         entity_id UInt32,
         qty Float32,
-        created_at DateTime
-    ) ENGINE = MergeTree() ORDER BY fact_id
+        created_at DateTime,
+        update_at DateTime
+    ) ENGINE = MergeTree() 
+    ORDER BY stock_id
     """)
 
 def insert_data_olap(client, df):
     client.insert_df("datamart_stok.dim_material", df[["material_id","material_name","unit_of_distribution"]])
-    client.insert_df("datamart_stok.dim_entity", df[["entity_id","entities_name","address","lat","lang"]])
+    client.insert_df("datamart_stok.dim_entity", df[["entity_id","regency_id","entities_name","address","lat","lang"]])
     client.insert_df("datamart_stok.dim_province", df[["province_id","name_provinces"]])
-    client.insert_df("datamart_stok.dim_regency", df[["regency_id","name_regency"]])
+    client.insert_df("datamart_stok.dim_regency", df[["regency_id","province_id","name_regency"]])
     client.insert_df("datamart_stok.fact_stocks ", df[["stock_id","material_id","entity_id","qty","created_at"]])
 
+def normalize_data(df):
+    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    df["lang"] = pd.to_numeric(df["lang"], errors="coerce")
+
+    df["lat"] = df["lat"].fillna(0.0)
+    df["lang"] = df["lang"].fillna(0.0)
+    
+    return df
 
 query_stock = """select 
 s.id as stock_id,
@@ -118,10 +130,12 @@ provinces = get_data_from_table(cursor, "select id as province_id, name as name_
 regencies = get_data_from_table(cursor, "select id as regency_id, name as name_regency from regencies")
 print("selesai mengambil semua data")
 
+new_entities = normalize_data(entities)
+
 merge_data = (
     stocks
     .merge(materials, left_on="master_material_id", right_on="material_id", how="inner")
-    .merge(entities, left_on="entity_id", right_on="entities_id", how="inner")
+    .merge(new_entities, left_on="entity_id", right_on="entities_id", how="inner")
     .merge(provinces, left_on="province_id", right_on="province_id", how="inner")
     .merge(regencies, left_on="regency_id", right_on="regency_id", how="inner")
     # .drop(columns=["master_material_id", "entity_id", "id_x", "id_y"])
@@ -129,6 +143,7 @@ merge_data = (
 
 print("selesai menggambungkan semua data")
 print(merge_data.head())
+print(merge_data.columns)
 
 print("insert data to olap")
 insert_data_olap(client, merge_data)
